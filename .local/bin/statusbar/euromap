@@ -1,0 +1,145 @@
+#!/bin/sh
+# Shared machinery for the map based statusbar blocks (sb-doppler, sb-heatmap).
+# Sourced, not run: it defines the region table, the Web Mercator tile maths and
+# the cached OpenStreetMap basemap that both blocks draw on top of.
+
+mapcache="${XDG_CACHE_HOME:-$HOME/.cache}/euromap"
+mapua="euromap statusbar block (personal weather script)"
+
+# name|zoom|minlon|minlat|maxlon|maxlat
+mapregions="UK|5|-8.7|49.8|2.1|59.5
+Ireland|6|-10.9|51.2|-5.3|55.5
+France|5|-5.4|41.3|9.8|51.4
+Spain|5|-9.5|35.9|3.4|43.9
+Portugal|6|-9.6|36.9|-6.0|42.2
+Italy|5|6.6|36.5|18.6|47.2
+Germany|5|5.8|47.2|15.1|55.1
+Poland|5|14.1|49.0|24.2|54.9
+Switzerland and Austria|5|5.9|45.8|17.2|49.1
+Belgium and Luxembourg|6|2.5|49.4|6.5|51.6
+Greece|5|19.3|34.8|28.3|41.8
+Nordics|4|4.0|54.5|31.5|71.2
+All Europe|4|-12.0|34.0|31.0|62.0"
+
+# ImageMagick 7 puts every verb behind "magick"; 6 ships them as separate
+# binaries. Call through this so both work.
+im() {
+	if command -v magick >/dev/null 2>&1; then
+		magick "$@"
+	else
+		"$@"
+	fi
+}
+
+haveim() {
+	command -v magick >/dev/null 2>&1 || command -v montage >/dev/null 2>&1
+}
+
+# Say why a build gave up. Without this the block announces that it is
+# fetching and then simply never shows anything, which looks identical to a
+# hang. Callers set mapname to their own title.
+mapfail() {
+	notify-send "${mapname:-Map}" "$1"
+	return 1
+}
+
+# Tile range covering a bounding box. Sets mx0 mx1 my0 my1, cols, rows.
+# Web Mercator; awk has no asinh so it is spelled log(t + sqrt(t*t + 1)).
+maptiles() {
+	set -- $(awk -v z="$1" -v lon0="$2" -v lat0="$3" -v lon1="$4" -v lat1="$5" 'BEGIN {
+		n = 2 ^ z; pi = atan2(0, -1)
+		x0 = int((lon0 + 180) / 360 * n)
+		x1 = int((lon1 + 180) / 360 * n)
+		r = lat1 * pi / 180; t = sin(r) / cos(r)
+		y0 = int((1 - log(t + sqrt(t * t + 1)) / pi) / 2 * n)
+		r = lat0 * pi / 180; t = sin(r) / cos(r)
+		y1 = int((1 - log(t + sqrt(t * t + 1)) / pi) / 2 * n)
+		print x0, x1, y0, y1
+	}')
+	mx0="$1" mx1="$2" my0="$3" my1="$4"
+	cols=$((mx1 - mx0 + 1))
+	rows=$((my1 - my0 + 1))
+}
+
+# Stitch a tile grid into $2. $1 is a URL with {X} and {Y} placeholders, $3 a
+# cache prefix. Tiles are kept, so the basemap is only ever fetched once.
+mapgrid() {
+	_tiles=""
+	mkdir -p "$mapcache"
+	_y="$my0"
+	while [ "$_y" -le "$my1" ]; do
+		_x="$mx0"
+		while [ "$_x" -le "$mx1" ]; do
+			_f="$mapcache/$3-$_x-$_y.png"
+			if [ ! -s "$_f" ]; then
+				_url=$(printf '%s\n' "$1" | sed "s/{X}/$_x/g; s/{Y}/$_y/g")
+				curl -sfL --max-time 20 -A "$mapua" -o "$_f" "$_url" || return 1
+			fi
+			_tiles="$_tiles $_f"
+			_x=$((_x + 1))
+		done
+		_y=$((_y + 1))
+	done
+	# -background none matters for overlay grids: montage fills its canvas with
+	# opaque white otherwise, throwing away transparency so the overlay hides
+	# the map instead of sitting on it.
+	# shellcheck disable=SC2086
+	im montage -background none $_tiles -tile "${cols}x${rows}" -geometry +0+0 "$2"
+}
+
+# Cached OpenStreetMap basemap for the current tile block. Sets mapbase.
+mapbasemap() {
+	mapbase="$mapcache/base-$1-$mx0-$my0-${cols}x$rows.png"
+	[ -s "$mapbase" ] && return 0
+	mapgrid "https://tile.openstreetmap.org/$1/{X}/{Y}.png" "$mapbase" "osm-$1"
+}
+
+maplookup() { printf '%s\n' "$mapregions" | grep -m1 "^$1|" ;}
+
+# GNU and BSD spell this differently and these scripts run on both.
+mapmtime() {
+	stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0
+}
+
+# A cached picture is only good for the thing that made it. Age alone is not
+# enough: changing region, switching what is being measured, or installing a
+# newer copy of the script all change the output, and keying on age meant the
+# old picture was served until it expired - which is why refreshing used to
+# mean deleting the cache by hand. Identity covers those, and the script's own
+# timestamps cover every future change without needing to list them.
+mapid() {
+	printf '%s|%s|%s' "$*" \
+		"$(mapmtime "$0")" "$(mapmtime "$(dirname "$0")/euromap")"
+}
+
+# True when $1 exists, was built from identity $3, and is younger than $2.
+mapfresh() {
+	[ -s "$1" ] || return 1
+	[ "$(cat "$1.id" 2>/dev/null)" = "$3" ] || return 1
+	[ "$2" -gt 0 ] || return 1
+	[ $(( $(date '+%s') - $(mapmtime "$1") )) -le "$2" ]
+}
+
+# Record what a freshly built picture was made from.
+mapmark() { printf '%s\n' "$2" > "$1.id" ;}
+
+# Pixel size of the current tile block's stitched image.
+mapwidth()  { echo $((cols * 256)) ;}
+mapheight() { echo $((rows * 256)) ;}
+
+# Reads "anything|lat|lon|..." on stdin and writes "px py anything|lat|lon|..."
+# for the rows that land inside the current block, with $1 pixels of margin.
+# One awk pass rather than one per point, since these lists run to dozens.
+mapproject() {
+	awk -F'|' -v z="$1" -v m="$2" -v x0="$mx0" -v y0="$my0" \
+	    -v w="$(mapwidth)" -v h="$(mapheight)" 'BEGIN { n = 2 ^ z; pi = atan2(0, -1) }
+	{
+		lat = $2 + 0; lon = $3 + 0
+		fx = (lon + 180) / 360 * n
+		r = lat * pi / 180; t = sin(r) / cos(r)
+		fy = (1 - log(t + sqrt(t * t + 1)) / pi) / 2 * n
+		px = int((fx - x0) * 256); py = int((fy - y0) * 256)
+		if (px >= m && px <= w - m && py >= m && py <= h - m)
+			print px, py, $0
+	}'
+}

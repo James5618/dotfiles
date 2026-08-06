@@ -1,0 +1,431 @@
+#!/bin/sh
+
+# Temperature heatmap for Europe.
+#
+# Shows the temperature as a smooth field with the reading printed over each
+# town, the way a TV forecast map does, and the time that reading was taken
+# along the top. Set metric=max below for today's high instead of now, which
+# is the number that matters for a heatwave. Data is Open-Meteo, which is free
+# and needs no API key, and takes a whole grid of points in one request. The
+# map and tile maths are shared with sb-doppler.
+#
+# There is no free temperature tile layer to draw the way sb-doppler draws
+# RainViewer's radar - OpenWeatherMap and Windy both want an API key - so the
+# field is interpolated here from a grid of point readings.
+#
+# Needs: curl, ImageMagick, nsxiv or mpv.
+
+# shellcheck source=./euromap
+. "$(dirname "$0")/euromap"
+
+mapname=" Heatmap"
+secs=900            # readings step every 15 minutes, so match that
+defaultloc="UK"
+# "now" is the reading on the ground this quarter hour, which is what a
+# forecast map shows; "max" is today's high, the heatwave number. Either way
+# the time the reading was taken is printed on the map.
+metric=now
+tmid=20             # neutral midpoint - neither cold nor hot
+autoscale=1         # fit the ends to the day, keeping tmid in the middle
+tmin=0              # used when autoscale is 0
+tmax=40
+opacity=55          # percent, so the map still reads underneath
+# Open-Meteo counts each location as an API call against a 600/minute free
+# tier budget, so a dense grid burns it fast: three 400-point requests in a
+# row already returns 429. The field is heavily blurred on the way to the
+# screen, so a coarser grid costs almost nothing visually.
+maxpoints=225
+
+cache="${XDG_CACHE_HOME:-$HOME/.cache}"
+heatloc="$cache/heatmap-region"
+heatmap="$cache/heatmap.png"
+deg=$(printf '\302\260')
+
+# Diverging blue <-> red through a neutral grey: temperature has a real
+# midpoint, so what is encoded is which side of mild a place sits on, not bare
+# magnitude. Deliberately not a rainbow.
+# stop|r|g|b   (stop is 0..1 across the low..high ends of the scale)
+ramp="0.00|13|54|107
+0.25|57|135|229
+0.45|205|226|251
+0.50|240|239|236
+0.55|247|206|199
+0.75|227|73|72
+1.00|125|29|29"
+
+# Places to print a reading, the way a forecast map labels its towns. minzoom
+# keeps a continental view down to capitals and only opens up the regional
+# cities once the map is close enough to fit them. The basemap already prints
+# the names, so only the number is drawn.
+# name|lat|lon|minzoom
+cities="London|51.51|-0.13|3
+Paris|48.86|2.35|3
+Berlin|52.52|13.40|3
+Madrid|40.42|-3.70|3
+Rome|41.90|12.50|3
+Warsaw|52.23|21.01|3
+Kyiv|50.45|30.52|3
+Stockholm|59.33|18.07|3
+Lisbon|38.72|-9.14|3
+Athens|37.98|23.73|3
+Oslo|59.91|10.75|3
+Dublin|53.35|-6.26|4
+Amsterdam|52.37|4.90|4
+Brussels|50.85|4.35|4
+Vienna|48.21|16.37|4
+Prague|50.08|14.44|4
+Copenhagen|55.68|12.57|4
+Helsinki|60.17|24.94|4
+Budapest|47.50|19.04|4
+Bucharest|44.43|26.10|4
+Bern|46.95|7.45|4
+Zagreb|45.82|15.98|4
+Belgrade|44.79|20.45|4
+Sofia|42.70|23.32|4
+Riga|56.95|24.11|4
+Vilnius|54.69|25.28|4
+Tallinn|59.44|24.75|4
+Minsk|53.90|27.57|4
+Edinburgh|55.95|-3.19|5
+Glasgow|55.86|-4.25|5
+Manchester|53.48|-2.24|5
+Birmingham|52.48|-1.90|5
+Cardiff|51.48|-3.18|5
+Belfast|54.60|-5.93|5
+Munich|48.14|11.58|5
+Hamburg|53.55|9.99|5
+Cologne|50.94|6.96|5
+Frankfurt|50.11|8.68|5
+Barcelona|41.39|2.17|5
+Seville|37.39|-5.98|5
+Valencia|39.47|-0.38|5
+Milan|45.46|9.19|5
+Naples|40.85|14.27|5
+Palermo|38.12|13.36|5
+Lyon|45.76|4.84|5
+Marseille|43.30|5.37|5
+Toulouse|43.60|1.44|5
+Bordeaux|44.84|-0.58|5
+Porto|41.15|-8.61|5
+Krakow|50.06|19.94|5
+Gdansk|54.35|18.65|5
+Zurich|47.38|8.54|5
+Gothenburg|57.71|11.97|5
+Thessaloniki|40.64|22.94|5
+Leeds|53.80|-1.55|5
+Liverpool|53.41|-2.99|5
+Bristol|51.45|-2.59|5
+Newcastle|54.98|-1.61|5
+Aberdeen|57.15|-2.09|5
+Inverness|57.48|-4.22|5
+Plymouth|50.38|-4.14|5
+Norwich|52.63|1.30|5
+Cork|51.90|-8.47|5
+Rotterdam|51.92|4.48|6"
+
+pickloc() {
+	chosen="$(printf '%s\n' "$mapregions" | cut -d'|' -f1 |
+		dmenu -r -i -l 14 -p "Heatmap region:")"
+	[ -z "$chosen" ] && return 1
+	maplookup "$chosen" >/dev/null || return 1
+	printf '%s\n' "$chosen" > "$heatloc"
+}
+
+# Grid of sample points across the tile block, row major, as "lat,lon". Points
+# sit at cell centres in tile space so they land evenly on the finished image
+# rather than evenly in latitude.
+gridpoints() {
+	awk -v z="$1" -v x0="$mx0" -v y0="$my0" -v gw="$gw" -v gh="$gh" \
+	    -v cols="$cols" -v rows="$rows" 'BEGIN {
+		n = 2 ^ z; pi = atan2(0, -1)
+		for (j = 0; j < gh; j++) {
+			for (i = 0; i < gw; i++) {
+				fx = x0 + (i + 0.5) / gw * cols
+				fy = y0 + (j + 0.5) / gh * rows
+				lon = fx / n * 360 - 180
+				# inverse Mercator; awk has neither sinh nor atan
+				t = pi * (1 - 2 * fy / n)
+				s = (exp(t) - exp(-t)) / 2
+				lat = atan2(s, 1) * 180 / pi
+				printf "%.4f,%.4f\n", lat, lon
+			}
+		}
+	}'
+}
+
+# Temperatures on stdin, one per line, row major -> a $1 x $2 PPM.
+buildppm() {
+	awk -v gw="$1" -v gh="$2" -v tmin="$rlo" -v tmax="$rhi" -v ramp="$ramp" '
+	BEGIN {
+		ns = split(ramp, rows, "\n")
+		for (k = 1; k <= ns; k++) {
+			split(rows[k], f, "|")
+			st[k] = f[1] + 0; rr[k] = f[2] + 0; gg[k] = f[3] + 0; bb[k] = f[4] + 0
+		}
+		printf "P3\n%d %d\n255\n", gw, gh
+	}
+	{
+		p = ($1 + 0 - tmin) / (tmax - tmin)
+		if (p < 0) p = 0; if (p > 1) p = 1
+		for (k = 1; k < ns && st[k+1] < p; k++) ;
+		lo = st[k]; hi = st[k+1]
+		if (hi <= lo) { r = rr[k]; g = gg[k]; b = bb[k] }
+		else {
+			w = (p - lo) / (hi - lo)
+			r = rr[k] + (rr[k+1] - rr[k]) * w
+			g = gg[k] + (gg[k+1] - gg[k]) * w
+			b = bb[k] + (bb[k+1] - bb[k]) * w
+		}
+		printf "%d %d %d\n", r, g, b
+	}'
+}
+
+# Settle which region is being drawn. Separate from getheatmap because the
+# cache identity needs it before deciding whether to build at all.
+resolve() {
+	region=$(cat "$heatloc" 2>/dev/null)
+	[ -z "$region" ] && region="$defaultloc"
+	entry=$(maplookup "$region")
+	# A name that is not in the list - a hand edited file, or a region that was
+	# renamed out from under it - falls back to the default.
+	if [ -z "$entry" ]; then
+		region="$defaultloc"
+		entry=$(maplookup "$region")
+	fi
+	[ -n "$entry" ]
+}
+
+getheatmap() {
+	zoom=$(printf '%s' "$entry" | cut -d'|' -f2)
+	maptiles "$zoom" \
+		"$(printf '%s' "$entry" | cut -d'|' -f3)" \
+		"$(printf '%s' "$entry" | cut -d'|' -f4)" \
+		"$(printf '%s' "$entry" | cut -d'|' -f5)" \
+		"$(printf '%s' "$entry" | cut -d'|' -f6)"
+
+	per=$(awk -v m="$maxpoints" -v c="$cols" -v r="$rows" \
+		'BEGIN { v = int(sqrt(m / (c * r))); print (v < 3 ? 3 : v) }')
+	gw=$((cols * per))
+	gh=$((rows * per))
+
+	notify-send "$mapname" "Building the $region temperature map."
+	mapbasemap "$zoom" ||
+		{ mapfail "Could not fetch map tiles from tile.openstreetmap.org."; return 1 ;}
+
+	# Cities close enough to matter at this zoom that also land on the image,
+	# then thinned so the readings do not sit on top of each other. The list is
+	# ordered by minzoom, so where two collide the more prominent one is
+	# already first and wins. Done before the request, so the ones dropped are
+	# never asked for.
+	placed=$(printf '%s\n' "$cities" | awk -F'|' -v z="$zoom" '$4 <= z' |
+		mapproject "$zoom" 22 |
+		awk -v dx=46 -v dy=20 '{
+			ok = 1
+			for (i = 1; i <= n; i++) {
+				ax = $1 - X[i]; if (ax < 0) ax = -ax
+				ay = $2 - Y[i]; if (ay < 0) ay = -ay
+				if (ax < dx && ay < dy) { ok = 0; break }
+			}
+			if (ok) { n++; X[n] = $1; Y[n] = $2; print }
+		}')
+	ncity=$(printf '%s' "$placed" | grep -c . || true)
+
+	# Grid first, then the cities, in one request: the response preserves the
+	# order it was asked in, so the two are just a split at gw*gh.
+	pts=$(gridpoints "$zoom")
+	lats=$(printf '%s\n' "$pts" | cut -d, -f1 | paste -sd, -)
+	lons=$(printf '%s\n' "$pts" | cut -d, -f2 | paste -sd, -)
+	if [ "$ncity" -gt 0 ]; then
+		lats="$lats,$(printf '%s\n' "$placed" | cut -d'|' -f2 | paste -sd, -)"
+		lons="$lons,$(printf '%s\n' "$placed" | cut -d'|' -f3 | paste -sd, -)"
+	fi
+
+	# The two metrics land in different shapes: a current reading is a bare
+	# number, a daily maximum is a one element array. Matching the bracket (or
+	# the digit) is also what keeps the "degrees C" string in the units block
+	# from being read as a reading.
+	case "$metric" in
+		max) mparam="daily=temperature_2m_max"
+		     mpat='"temperature_2m_max":\[-\?[0-9][0-9.]*'; msep='['
+		     mlabel="today's high"
+		     # A daily record is stamped with the date, so printing a clock
+		     # time off it would read as the hour the high was reached.
+		     mfmt='+%a %e %b' ;;
+		*)   mparam="current=temperature_2m"
+		     mpat='"temperature_2m":-\?[0-9][0-9.]*'; msep=':'
+		     mlabel="now"
+		     mfmt='+%a %H:%M %Z' ;;
+	esac
+
+	# Keep the status code: a rate limit and an unreachable host are very
+	# different problems and used to look identical from here.
+	code=$(curl -sL --max-time 45 -o "$mapcache/om.json" -w '%{http_code}' \
+		-G "https://api.open-meteo.com/v1/forecast" \
+		--data-urlencode "latitude=$lats" \
+		--data-urlencode "longitude=$lons" \
+		--data-urlencode "$mparam" \
+		--data-urlencode "forecast_days=1" \
+		--data-urlencode "timezone=UTC")
+	case "$code" in
+		200) ;;
+		429) mapfail "Open-Meteo's rate limit was hit. Try again in a minute."; return 1 ;;
+		000) mapfail "Could not reach api.open-meteo.com."; return 1 ;;
+		*)   mapfail "Open-Meteo returned HTTP $code."; return 1 ;;
+	esac
+
+	all=$(grep -o "$mpat" "$mapcache/om.json" | cut -d"$msep" -f2)
+	got=$(printf '%s\n' "$all" | grep -c .)
+
+	# When the reading was taken, in local time. The map is only honest if it
+	# says this: a "current" temperature is still up to a quarter hour old, and
+	# a cached image can be up to secs old on top of that.
+	obs=$(grep -o '"time":"[0-9][0-9-]*T[0-9:]*"' "$mapcache/om.json" |
+		head -1 | cut -d'"' -f4)
+	stamp=$(date -d "$(printf '%s' "$obs" | tr 'T' ' ') UTC" "$mfmt" 2>/dev/null) ||
+		stamp="$(printf '%s' "$obs" | tr 'T' ' ') UTC"
+	[ "$got" -eq $((gw * gh + ncity)) ] ||
+		{ mapfail "Expected $((gw * gh + ncity)) readings from Open-Meteo, got $got."; return 1 ;}
+	temps=$(printf '%s\n' "$all" | head -n $((gw * gh)))
+
+	# Fit the ends to the day but hold tmid in the middle, so the blue and red
+	# keep meaning "below" and "above mild" while the ramp still spans the data.
+	# A fixed 0-40 left a European summer sitting entirely in the pink half.
+	#
+	# Only points inside the region's own bounding box get a say. Tiles snap
+	# outwards, so a continental view reaches from the Sahara to the Arctic,
+	# and letting that set the ends put Europe back in the middle of the ramp -
+	# the very thing this is meant to fix.
+	if [ "$autoscale" = 1 ]; then
+		printf '%s\n' "$pts" > "$mapcache/pts.txt"
+		printf '%s\n' "$temps" > "$mapcache/temps.txt"
+		set -- $(paste -d, "$mapcache/pts.txt" "$mapcache/temps.txt" |
+			awk -F, -v mid="$tmid" \
+			    -v w="$(printf '%s' "$entry" | cut -d'|' -f3)" \
+			    -v s="$(printf '%s' "$entry" | cut -d'|' -f4)" \
+			    -v e="$(printf '%s' "$entry" | cut -d'|' -f5)" \
+			    -v n="$(printf '%s' "$entry" | cut -d'|' -f6)" '
+			$1 >= s && $1 <= n && $2 >= w && $2 <= e {
+				if (c++ == 0) { lo = hi = $3 }
+				if ($3 < lo) lo = $3; if ($3 > hi) hi = $3
+			}
+			END {
+				if (c == 0) { print mid - 20, mid + 20; exit }
+				d = (hi - mid > mid - lo) ? hi - mid : mid - lo
+				d = int(d / 5) * 5 + 5
+				if (d < 10) d = 10
+				print mid - d, mid + d
+			}')
+		rlo="$1" rhi="$2"
+	else
+		rlo="$tmin" rhi="$tmax"
+	fi
+
+	mkdir -p "$mapcache"
+	printf '%s\n' "$temps" | buildppm "$gw" "$gh" > "$mapcache/heat.ppm"
+
+	size=$(im identify -format '%wx%h' "$mapbase") ||
+		{ mapfail "ImageMagick could not read the basemap."; return 1 ;}
+	# Upscaling the coarse grid is what turns points into a field; the blur
+	# just takes the last of the cell edges off.
+	im convert "$mapcache/heat.ppm" -resize "$size!" -blur 0x6 \
+		-alpha set -channel A -evaluate set "$opacity%" +channel \
+		"$mapcache/heat.png" ||
+		{ mapfail "ImageMagick could not render the temperature field."; return 1 ;}
+	im composite "$mapcache/heat.png" "$mapbase" "$mapcache/heat-flat.png" ||
+		{ mapfail "ImageMagick could not lay the field over the map."; return 1 ;}
+
+	label "$mapcache/heat-flat.png" "$mapcache/heat-lbl.png" \
+		"$(printf '%s\n' "$all" | tail -n +$((gw * gh + 1)))" ||
+		cp "$mapcache/heat-flat.png" "$mapcache/heat-lbl.png"
+	legend "$mapcache/heat-lbl.png" "$heatmap" || cp "$mapcache/heat-lbl.png" "$heatmap"
+	mapmark "$heatmap" "$(heatid)"
+}
+
+# Print each city's reading where the city sits. Drawn twice: once thick and
+# dark, once white on top, so the number stays readable over any part of the
+# ramp without a panel behind it.
+label() {
+	# Saved before "set --", which is what builds the -annotate list and would
+	# otherwise clobber these.
+	labelin="$1" labelout="$2" ltemps="$3"
+	[ "$ncity" -gt 0 ] || return 1
+	set --
+	i=0
+	for t in $ltemps; do
+		i=$((i + 1))
+		pos=$(printf '%s\n' "$placed" | sed -n "${i}p")
+		[ -n "$pos" ] || break
+		px=$(printf '%s' "$pos" | cut -d' ' -f1)
+		py=$(printf '%s' "$pos" | cut -d' ' -f2)
+		# -annotate places the baseline's left end, so the text hangs down and
+		# to the right of the town. Shift it back by half its width and down by
+		# half its height, or every reading sits beside the wrong place - which
+		# is what pushed London's out into the North Sea.
+		num=$(printf '%.0f' "$t")
+		set -- "$@" -annotate \
+			"+$((px - (${#num} + 1) * 4))+$((py + 5))" "$num$deg"
+	done
+	[ $# -gt 0 ] || return 1
+	im convert "$labelin" -pointsize 15 \
+		-stroke '#11111b' -strokewidth 4 -fill '#11111b' "$@" \
+		-stroke none -fill white "$@" \
+		"$labelout"
+}
+
+# Colour bar with the two ends and the midpoint labelled. A continuous scale is
+# unreadable without its numbers, so if the text cannot be drawn the caller
+# falls back to the bare map rather than shipping an unlabelled ramp.
+legend() {
+	w=$(im identify -format '%w' "$1")
+	bx=$((w / 2)); [ "$bx" -lt 240 ] && bx=240
+	x0=$(( (w - bx) / 2 ))
+	# Build the bar from an even rlo..rhi sweep through the same colour code
+	# the data went through, so the key cannot drift from what it describes.
+	# (Resizing the data grid instead would just average the map.)
+	awk -v n=256 -v a="$rlo" -v b="$rhi" \
+		'BEGIN { for (i = 0; i < n; i++) printf "%.4f\n", a + (b - a) * i / (n - 1) }' |
+		buildppm 256 1 > "$mapcache/bar.ppm" || return 1
+	im convert "$mapcache/bar.ppm" -resize "${bx}x16!" "$mapcache/bar.png" || return 1
+	im convert "$1" \
+		-fill '#11111b' -draw "rectangle $((x0-10)),6 $((x0+bx+10)),74" \
+		"$mapcache/heat-bg.png" || return 1
+	im composite -geometry "+$x0+40" "$mapcache/bar.png" "$mapcache/heat-bg.png" \
+		"$mapcache/heat-bar.png" || return 1
+	im convert "$mapcache/heat-bar.png" -fill white \
+		-pointsize 13 -annotate "+$x0+28" "$region, $mlabel, $stamp" \
+		-pointsize 12 \
+		-annotate "+$x0+70" "$(printf '%.0f' "$rlo")$deg" \
+		-annotate "+$((x0 + bx / 2 - 10))+70" "$(printf '%.0f' "$tmid")$deg" \
+		-annotate "+$((x0 + bx - 24))+70" "$(printf '%.0f' "$rhi")$deg" \
+		"$2"
+}
+
+show() {
+	if command -v nsxiv >/dev/null 2>&1; then
+		setsid -f nsxiv -b "$heatmap"
+	else
+		setsid -f mpv --no-osc --loop=inf --no-terminal "$heatmap"
+	fi
+}
+
+# Everything that changes the picture. Region and metric are the obvious ones;
+# the scale settings change it too, and mapid folds in the script timestamps so
+# an updated copy rebuilds instead of serving the previous version's output.
+heatid() { mapid "$region" "$metric" "$autoscale" "$tmid" "$tmin" "$tmax" "$opacity" ;}
+
+case $BLOCK_BUTTON in
+	1) haveim || { mapfail "ImageMagick is not installed, so the heatmap cannot be built. On Arch: sudo pacman -S imagemagick"; exit 1 ;}
+	resolve || { mapfail "No region to draw."; exit 1 ;}
+	mapfresh "$heatmap" "$secs" "$(heatid)" || getheatmap
+	if [ -s "$heatmap" ]; then show; else mapfail "No heatmap to show."; fi ;;
+	2) pickloc && resolve && getheatmap && [ -s "$heatmap" ] && show ;;
+	3) notify-send "$mapname module" "\- Left click for today's maximum temperature across $(cat "$heatloc" 2>/dev/null || echo "$defaultloc").
+- Middle click to change region.
+Readings are printed over each town; the scale fits the day around ${tmid}$deg." ;;
+	6) setsid -f "$TERMINAL" -e "$EDITOR" "$0" ;;
+esac
+
+# U+F2C7 (nf-fa-thermometer_full), written as bytes so no editor or locale can
+# mangle it. Font Awesome's BMP range only - plane 15 glyphs exist solely in the
+# patched Nerd Font and box out anywhere it is missing.
+printf '\357\213\207\n'

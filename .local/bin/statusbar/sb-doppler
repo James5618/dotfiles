@@ -1,239 +1,150 @@
 #!/bin/sh
 
-# Show a Doppler RADAR of a user's preferred location.
+# Show a rain RADAR for a location in Europe. Defaults to the UK.
+#
+# Europe has no equivalent of NOAA's ready-made ridge loops: almost no national
+# met service publishes a plain radar image at a stable URL. The two that do,
+# Germany's DWD and the Netherlands' KNMI, are kept as high detail options. For
+# everywhere else - including the UK, which publishes nothing usable - frames
+# come from RainViewer's public tile API, which needs no key, composited over an
+# OpenStreetMap basemap so the rain has some geography under it.
+#
+# Needs: curl, ImageMagick, mpv.
 
-secs=600 # Download a new doppler radar if one hasn't been downloaded in $secs seconds.
-radarloc="${XDG_CACHE_HOME:-$HOME/.cache}/radar"
-doppler="${XDG_CACHE_HOME:-$HOME/.cache}/doppler.gif"
+# shellcheck source=./euromap
+. "$(dirname "$0")/euromap"
 
-pickloc() { chosen="$(echo "US: CONUS: Continental United States
-US: Northeast
-US: Southeast
-US: PacNorthWest
-US: PacSouthWest
-US: UpperMissVly
-US: SouthMissVly
-US: SouthPlains
-US: NorthRockies
-US: SouthRockies
-US: Alaska
-US: Carib
-US: Hawaii
-US: CentGrLakes
-US: Conus-Large
-US: KABR: Aberdeen, SD
-US: KBIS: Bismarck, ND
-US: KFTG: Denver/Boulder, CO
-US: KDMX: Des Moines, IA
-US: KDTX: Detroit, MI
-US: KDDC: Dodge City, KS
-US: KDLH: Duluth, MN
-US: KCYS: Cheyenne, WY
-US: KLOT: Chicago, IL
-US: KGLD: Goodland, KS
-US: KUEX: Hastings, NE
-US: KGJX: Grand Junction, CO
-US: KGRR: Grand Rapids, MI
-US: KMVX: Fargo/Grand Forks, ND
-US: KGRB: Green Bay, WI
-US: KIND: Indianapolis, IN
-US: KJKL: Jackson, KY
-US: KARX: La Crosse, WI
-US: KILX: Lincoln/Central Illinois, IL
-US: KLVX: Louisville, KY
-US: KMQT: Marquette
-US: KMKX: Milwaukee, WI
-US: KMPX: Minneapolis, MN
-US: KAPX: Gaylord/Alpena, MI
-US: KLNX: North Platte, NE
-US: KIWX: N. Webster/Northern, IN
-US: KOAX: Omaha, NE
-US: KPAH: Paducah, KY
-US: KEAX: Pleasant Hill, MO
-US: KPUX: Pueblo, CO
-US: KDVN: Quad Cities, IA
-US: KUDX: Rapid City, SD
-US: KRIW: Riverton, WY
-US: KSGF: Springfield, MO
-US: KLSX: St. LOUIS, MO
-US: KFSD: Sioux Falls, SD
-US: KTWX: Topeka, KS
-US: KICT: Wichita, KS
-US: KVWX: Paducah, KY
-US: ICAO: Responsible Wfo
-US: KLTX: WILMINGTON, NC
-US: KCCX: State College/Central, PA
-US: KLWX: Sterling, VA
-US: KFCX: Blacksburg/Roanoke, VA
-US: KRAX: Raleigh/Durham, NC
-US: KGYX: Portland, ME
-US: KDIX: Mt Holly/Philadelphia, PA
-US: KPBZ: Pittsburgh, PA
-US: KAKQ: Wakefield, VA
-US: KMHX: Morehead City, NC
-US: KGSP: Greer/Greenville/Sprtbg, SC
-US: KILN: Wilmington/Cincinnati, OH
-US: KCLE: Cleveland, OH
-US: KCAE: Columbia, SC
-US: KBGM: Binghamton, NY
-US: KENX: Albany, NY
-US: KBUF: Buffalo, NY
-US: KCXX: Burlington, VT
-US: KCBW: Caribou, ME
-US: KBOX: Boston /Taunton, MA
-US: KOKX: New York City, NY
-US: KCLX: Charleston, SC
-US: KRLX: Charleston, WV
-US: ICAO: Responsible WFO
-US: KBRO: Brownsville, TX
-US: KABX: Albuquerque, NM
-US: KAMA: Amarillo, TX
-US: KFFC: Peachtree City/Atlanta, GA
-US: KEWX: Austin/Sanantonio, TX
-US: KBMX: Birmingham, AL
-US: KCRP: Corpus Christi, TX
-US: KFWS: Dallas / Ft. Worth, TX
-US: KEPZ: El Paso, TX
-US: KHGX: Houston/ Galveston, TX
-US: KJAX: Jacksonville, FL
-US: KBYX: Key West, FL
-US: KMRX: Morristown/knoxville, TN
-US: KLBB: Lubbock, TX
-US: KLZK: Little Rock, AR
-US: KLCH: Lake Charles, LA
-US: KOHX: Nashville, TN
-US: KMLB: Melbourne, FL
-US: KNQA: Memphis, TN
-US: KAMX: Miami, FL
-US: KMAF: Midland/odessa, TX
-US: KTLX: Norman, OK
-US: KHTX: Huntsville, AL
-US: KMOB: Mobile, AL
-US: KTLH: Tallahassee, FL
-US: KTBW: Tampa Bay Area, FL
-US: KSJT: San Angelo, TX
-US: KINX: Tulsa, OK
-US: KSRX: Tulsa, OK
-US: KLIX: New Orleans/slidell, LA
-US: KDGX: Jackson, MS
-US: KSHV: Shreveport, LA
-US: ICAO: Responsible WFO
-US: KLGX: Seattle / Tacoma, WA
-US: KOTX: Spokane, WA
-US: KEMX: Tucson, AZ
-US: KYUX: Phoenix, AZ
-US: KNKX: San Diego, CA
-US: KMUX: Monterey/san Francisco, CA
-US: KHNX: San Joaquin/hanford, CA
-US: KSOX: San Diego, CA
-US: KATX: Seattle / Tacoma, WA
-US: KIWA: Phoenix, AZ
-US: KRTX: Portland, OR
-US: KSFX: Pocatello, ID
-US: KRGX: Reno, NV
-US: KDAX: Sacramento, CA
-US: KMTX: Salt Lake City, UT
-US: KPDT: Pendleton, OR
-US: KMSX: Missoula, MT
-US: KESX: Las Vegas, NV
-US: KVTX: Los Angeles, CA
-US: KMAX: Medford, OR
-US: KFSX: Flagstaff, AZ
-US: KGGW: Glasgow, MT
-US: KLRX: Elko, NV
-US: KBHX: Eureka, CA
-US: KTFX: Great Falls, MT
-US: KCBX: Boise, ID
-US: KBLX: Billings, MT
-US: KICX: Salt Lake City, UT
-US: ICAO: Responsible Wfo W/ MSCF
-US: PABC: Anchorage, AK
-US: PAPD: Fairbanks, AK
-US: PHKM: Honolulu, HI
-US: PAHG: Anchorage, AK
-US: PAKC: Anchorage, AK
-US: PAIH: Anchorage, AK
-US: PHMO: Honolulu, HI
-US: PAEC: Fairbanks, AK
-US: TJUA: San Juan, PR
-US: PACG: Juneau, AK
-US: PHKI: Honolulu, HI
-US: PHWA: Honolulu, HI
-US: ICAO: Responsible Wfo W/ MSCF
-US: KFDR: Norman, OK
-US: PGUA: Guam
-US: KBBX: Sacramento, CA
-US: KFDX: Albuquerque, NM
-US: KGWX: Jackson, MS
-US: KDOX: Wakefield, VA
-US: KDYX: San Angelo, TX
-US: KEYX: Las Vegas, NV
-US: KEVX: Mobile, AL
-US: KHPX: Paducah, KY
-US: KTYX: Burlington, VT
-US: KGRK: Dallas / Ft. Worth, TX
-US: KPOE: Lake Charles, LA
-US: KEOX: Tallahassee, FL
-US: KHDX: El Paso, TX
-US: KDFX: San Antonio, TX
-US: KMXX: Birmingham, AL
-US: KMBX: Bismarck, ND
-US: KVAX: Jacksonville, FL
-US: KJGX: Peachtree City/atlanta, GA
-US: KVNX: Norman, OK
-US: KVBX: Vandenberg Afb: Orcutt, CA
-DE: BAW: Baden-Württemberg
-DE: BAY: Bavaria
-DE: BBB: Berlin
-DE: BBB: Brandenburg
-DE: HES: Hesse
-DE: MVP: Mecklenburg-Western Pomerania
-DE: NIB: Lower Saxony
-DE: NIB: Bremen
-DE: NRW: North Rhine-Westphalia
-DE: RPS: Rhineland-Palatinate
-DE: RPS: Saarland
-DE: SAC: Saxony
-DE: SAA: Saxony-Anhalt
-DE: SHH: Schleswig-Holstein
-DE: SHH: Hamburg
-DE: THU: Thuringia
-NL: The Netherlands" | dmenu -r -i -l 50 -p "Select a radar to use as default:")"
+mapname=" Doppler RADAR"
+secs=600        # reuse the cached animation if it is newer than this
+frames=6        # RainViewer frames per animation
+delay=40        # hundredths of a second between frames
+defaultloc="UK"
 
-# Ensure user did not escape.
-[ -z "$chosen" ] && exit 1
+cache="${XDG_CACHE_HOME:-$HOME/.cache}"
+radarloc="$cache/radar"
+doppler="$cache/doppler.gif"
 
-# Set country code and radar code.
-countrycode=${chosen%%:*}
-radarcode=${chosen#* } radarcode=${radarcode%:*}
+# The shared geographic regions all use RainViewer. These are the extras: the
+# two national services that publish a ready-made animation of their own.
+#   DWD  = Deutscher Wetterdienst film, field: state code
+#   KNMI = Koninklijk Nederlands Meteorologisch Instituut map, no fields
+national="NL: Netherlands (KNMI)|KNMI|
+DE: Baden-Wuerttemberg (DWD)|DWD|baw
+DE: Bavaria (DWD)|DWD|bay
+DE: Berlin and Brandenburg (DWD)|DWD|bbb
+DE: Hesse (DWD)|DWD|hes
+DE: Mecklenburg-W Pomerania (DWD)|DWD|mvp
+DE: Lower Saxony and Bremen (DWD)|DWD|nib
+DE: North Rhine-Westphalia (DWD)|DWD|nrw
+DE: Rhineland-Palatinate (DWD)|DWD|rps
+DE: Saxony (DWD)|DWD|sac
+DE: Saxony-Anhalt (DWD)|DWD|saa
+DE: Schleswig-Holstein and Hamburg (DWD)|DWD|shh
+DE: Thuringia (DWD)|DWD|thu"
 
-# Print codes to $radarloc file.
- printf "%s,%s\\n" "$countrycode" "$radarcode" > "$radarloc" ;}
+menu() { printf '%s\n' "$mapregions" | cut -d'|' -f1; printf '%s\n' "$national" | cut -d'|' -f1 ;}
+natlookup() { printf '%s\n' "$national" | grep -m1 "^$1|" ;}
+
+pickloc() {
+	chosen="$(menu | dmenu -r -i -l 20 -p "Select a radar to use as default:")"
+	# Ensure user did not escape.
+	[ -z "$chosen" ] && return 1
+	{ maplookup "$chosen" >/dev/null || natlookup "$chosen" >/dev/null ;} || return 1
+	printf '%s\n' "$chosen" > "$radarloc"
+}
+
+getrainviewer() {
+	zoom="$1"
+	maptiles "$1" "$2" "$3" "$4" "$5"
+
+	json=$(curl -sfL --max-time 20 "https://api.rainviewer.com/public/weather-maps.json") ||
+		{ mapfail "Could not reach api.rainviewer.com."; return 1 ;}
+	host=$(printf '%s' "$json" | grep -o '"host":"[^"]*"' | cut -d'"' -f4)
+	paths=$(printf '%s' "$json" | grep -o '"path":"[^"]*"' | cut -d'"' -f4 | tail -n "$frames")
+	{ [ -n "$host" ] && [ -n "$paths" ] ;} ||
+		{ mapfail "RainViewer returned no radar frames."; return 1 ;}
+
+	mkdir -p "$mapcache"
+	rm -f "$mapcache"/frame-*.png
+	mapbasemap "$zoom" ||
+		{ mapfail "Could not fetch map tiles from tile.openstreetmap.org."; return 1 ;}
+
+	i=0
+	for p in $paths; do
+		i=$((i + 1))
+		rm -f "$mapcache"/rv-*.png
+		if mapgrid "$host$p/256/$zoom/{X}/{Y}/4/1_1.png" "$mapcache/rain.png" "rv"; then
+			im composite "$mapcache/rain.png" "$mapbase" \
+				"$(printf '%s/frame-%02d.png' "$mapcache" "$i")"
+		fi
+	done
+	[ -n "$(ls "$mapcache"/frame-*.png 2>/dev/null)" ] ||
+		{ mapfail "Got the map but built no radar frame. Is ImageMagick installed?"; return 1 ;}
+	im convert -delay "$delay" -loop 0 "$mapcache"/frame-*.png "$doppler" ||
+		{ mapfail "ImageMagick could not assemble the animation."; return 1 ;}
+}
+
+# Settle which region is being drawn and from which source. Separate from
+# getdoppler because the cache identity needs it before deciding to build.
+resolve() {
+	region=$(cat "$radarloc" 2>/dev/null)
+	[ -z "$region" ] && region="$defaultloc"
+	entry=$(maplookup "$region"); src=RV
+	if [ -z "$entry" ]; then
+		entry=$(natlookup "$region")
+		src=$(printf '%s' "$entry" | cut -d'|' -f2)
+	fi
+	# A name that is not in either list - a hand edited file, or a region that
+	# was renamed out from under it - falls back to the default rather than
+	# leaving nothing to show.
+	if [ -z "$entry" ]; then
+		region="$defaultloc"
+		entry=$(maplookup "$region"); src=RV
+	fi
+	[ -n "$entry" ]
+}
 
 getdoppler() {
-	country=$(cut -c -2 "$radarloc")
-	province=$(cut -c 4- "$radarloc")
-	notify-send " Doppler RADAR" "Pulling most recent Doppler RADAR for $province."
-	case "$country" in
-		"US") province="$(echo "$province" | tr "[:lower:]" "[:upper:]")"
-		curl -sL --max-time 30 "https://radar.weather.gov/ridge/standard/${province}_loop.gif" > "$doppler" ;;
-		"DE") province="$(echo "$province" | tr "[:upper:]" "[:lower:]")"
-		curl -sL --max-time 30 "https://www.dwd.de/DWD/wetter/radar/radfilm_${province}_akt.gif" > "$doppler" ;;
-		"NL") curl -sL --max-time 30 "https://cdn.knmi.nl/knmi/map/general/weather-map.gif" > "$doppler" ;;
+	notify-send "$mapname" "Pulling the most recent radar for $region."
+	case "$src" in
+		RV)
+			haveim ||
+				{ mapfail "ImageMagick is not installed, so the $region radar cannot be built. On Arch: sudo pacman -S imagemagick"; return 1 ;}
+			# shellcheck disable=SC2046
+			getrainviewer $(printf '%s' "$entry" | cut -d'|' -f2-6 | tr '|' ' ') ;;
+		DWD)
+			state=$(printf '%s' "$entry" | cut -d'|' -f3)
+			curl -sfL --max-time 30 -o "$doppler" \
+				"https://www.dwd.de/DWD/wetter/radar/radfilm_${state}_akt.gif" ||
+				{ mapfail "Could not fetch the DWD film for $region."; return 1 ;} ;;
+		KNMI)
+			curl -sfL --max-time 30 -o "$doppler" \
+				"https://cdn.knmi.nl/knmi/map/general/weather-map.gif" ||
+				{ mapfail "Could not fetch the KNMI map."; return 1 ;} ;;
 	esac
+	mapmark "$doppler" "$(dopid)"
 }
 
 showdoppler() { setsid -f mpv --no-osc --loop=inf --no-terminal "$doppler" ;}
 
+# Everything that changes the animation, plus the script timestamps via mapid,
+# so an updated copy rebuilds instead of serving the previous version's output.
+dopid() { mapid "$region" "$src" "$frames" "$delay" ;}
+
 case $BLOCK_BUTTON in
-	1) [ ! -f "$radarloc" ] && pickloc && getdoppler
-	[ $(($(date '+%s') - $(stat -c %Y "$doppler"))) -gt "$secs" ] && getdoppler
-	showdoppler ;;
-	2) pickloc && getdoppler && showdoppler ;;
-	3) notify-send " Doppler RADAR module" "\- Left click for local Doppler RADAR.
-- Middle click to update RADAR location.
-After $secs seconds, new clicks will also automatically update the doppler RADAR."  ;;
+	1) resolve || { mapfail "No region to draw."; exit 1 ;}
+	mapfresh "$doppler" "$secs" "$(dopid)" || getdoppler
+	# A getdoppler that already explained itself leaves no file; only warn
+	# here if nothing was produced and nothing was said.
+	if [ -s "$doppler" ]; then showdoppler; else mapfail "No radar image to show."; fi ;;
+	2) pickloc && resolve && getdoppler && [ -s "$doppler" ] && showdoppler ;;
+	3) notify-send " Doppler RADAR module" "\- Left click for the local rain RADAR.
+- Middle click to change RADAR location.
+Defaults to the $defaultloc. After $secs seconds, a left click refreshes it too." ;;
 	6) setsid -f "$TERMINAL" -e "$EDITOR" "$0" ;;
 esac
 
-echo 
+# U+F279 (nf-fa-map), written as bytes so no editor or locale can mangle it.
+# Font Awesome's BMP range only - plane 15 glyphs exist solely in the patched
+# Nerd Font and box out anywhere it is missing.
+printf '\357\211\271\n'
