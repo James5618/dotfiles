@@ -35,4 +35,11 @@ Use [bootstrap](https://github.com/james5618/bootstrap) to autoinstall
 everything, or clone this repo into your home directory and install the
 [dependencies](https://github.com/james5618/bootstrap/blob/master/progs.csv).
 
+## Licence
+
+GPLv3, see [LICENSE](LICENSE). The copyright notice lives here rather than in
+that file because the GPL text is meant to be passed on verbatim.
+
+© 2026 james5618 <james@josullivan.co.uk>
+
 
