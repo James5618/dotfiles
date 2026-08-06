@@ -1,0 +1,34 @@
+[global]
+    monitor = 0
+    follow = keyboard
+    width = 370
+    height = (0,350)
+    offset = (0,19)
+    padding = 6
+    horizontal_padding = 8
+    transparency = 25
+    frame_width = 2
+    frame_color = "#89b4fa"
+    corner_radius = 8
+    font = Monospace 12
+    format = "<b>%s</b>\n%b"
+
+# catppuccin mocha, matching the rest of the rice
+
+[urgency_low]
+    background = "#1e1e2e"
+    foreground = "#6c7086"
+    frame_color = "#45475a"
+    timeout = 3
+
+[urgency_normal]
+    background = "#1e1e2e"
+    foreground = "#cdd6f4"
+    frame_color = "#89b4fa"
+    timeout = 5
+
+[urgency_critical]
+    background = "#1e1e2e"
+    foreground = "#f38ba8"
+    frame_color = "#f38ba8"
+    timeout = 10

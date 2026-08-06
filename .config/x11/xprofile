@@ -1,0 +1,24 @@
+#!/bin/sh
+
+# This file runs when a DM logs you into a graphical session.
+# If you use startx/xinit like a Chad, this file will also be sourced.
+
+xrandr --dpi 96		# Set DPI. User may want to use a larger number for larger screens.
+xsetroot -cursor_name left_ptr	# Root cursor; without this the pointer is invisible until an app sets one.
+setbg &			# set the background with the `setbg` script
+xrdb ${XDG_CONFIG_HOME:-$HOME/.config}/x11/xresources & xrdbpid=$!	# Load Xresources colors/settings on startup
+
+autostart="mpd dunst unclutter pipewire remapd"
+
+for program in $autostart; do
+	pidof -sx "$program" || "$program" &
+done >/dev/null 2>&1
+
+# picom is started separately so it can fall back: the glx backend rounds
+# corners far more cleanly, but it needs working OpenGL and exits immediately
+# where there is none, which would leave windows square and unfaded.
+pidof -sx picom >/dev/null 2>&1 ||
+	{ picom || picom --backend xrender ;} >/dev/null 2>&1 &
+
+# Ensure that xrdb has finished running before moving on to start the WM/DE.
+[ -n "$xrdbpid" ] && wait "$xrdbpid"
