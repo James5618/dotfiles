@@ -15,8 +15,8 @@
 #
 # Needs: curl, ImageMagick, nsxiv or mpv.
 
-# shellcheck source=./euromap
-. "$(dirname "$0")/euromap"
+# shellcheck source=./sb-euromap
+. "$(dirname "$0")/sb-euromap"
 
 mapname=" Heatmap"
 secs=900            # readings step every 15 minutes, so match that

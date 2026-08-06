@@ -109,7 +109,7 @@ mapmtime() {
 # timestamps cover every future change without needing to list them.
 mapid() {
 	printf '%s|%s|%s' "$*" \
-		"$(mapmtime "$0")" "$(mapmtime "$(dirname "$0")/euromap")"
+		"$(mapmtime "$0")" "$(mapmtime "$(dirname "$0")/sb-euromap")"
 }
 
 # True when $1 exists, was built from identity $3, and is younger than $2.

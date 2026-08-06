@@ -11,8 +11,8 @@
 #
 # Needs: curl, ImageMagick, mpv.
 
-# shellcheck source=./euromap
-. "$(dirname "$0")/euromap"
+# shellcheck source=./sb-euromap
+. "$(dirname "$0")/sb-euromap"
 
 mapname=" Doppler RADAR"
 secs=600        # reuse the cached animation if it is newer than this
