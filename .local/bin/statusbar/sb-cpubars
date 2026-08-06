@@ -9,14 +9,21 @@
 cache=/tmp/cpubarscache
 
 case $BLOCK_BUTTON in
-	2) setsid -f "$TERMINAL" -e htop ;;
+	2) daemon -f "$TERMINAL" -e htop ;;
 	3) notify-send "🪨 CPU load module" "Each bar represents
 one CPU core";;
-	6) setsid -f "$TERMINAL" -e "$EDITOR" "$0" ;;
+	6) daemon -f "$TERMINAL" -e "$EDITOR" "$0" ;;
 esac
 
 # id total idle
-stats=$(awk '/cpu[0-9]+/ {printf "%d %d %d\n", substr($1,4), ($2 + $3 + $4 + $5), $5 }' /proc/stat)
+# kern.cp_times is the FreeBSD equivalent of /proc/stat: five counters
+# (user, nice, system, interrupt, idle) per core, all on one line.
+stats=$(sysctl -n kern.cp_times | awk '{
+	for (i = 0; i * 5 < NF; i++) {
+		total = $(i * 5 + 1) + $(i * 5 + 2) + $(i * 5 + 3) + $(i * 5 + 4) + $(i * 5 + 5)
+		printf "%d %d %d\n", i, total, $(i * 5 + 5)
+	}
+}')
 [ ! -f $cache ] && echo "$stats" > "$cache"
 old=$(cat "$cache")
 printf "🪨"

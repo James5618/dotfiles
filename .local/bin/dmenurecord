@@ -13,7 +13,7 @@ getdim() { xrandr | grep -oP '(?<=current ).*(?=,)' | tr -d ' ' ;}
 
 updateicon() { \
 	echo "$1" > /tmp/recordingicon
-	pkill -RTMIN+9 "${STATUSBAR:-dwmblocks}"
+	pkill -74 "${STATUSBAR:-dwmblocks}"
 	}
 
 killrecording() {
@@ -21,7 +21,7 @@ killrecording() {
 	kill -15 "$recpid"
 	rm -f /tmp/recordingpid
 	updateicon ""
-	pkill -RTMIN+9 "${STATUSBAR:-dwmblocks}"
+	pkill -74 "${STATUSBAR:-dwmblocks}"
 	}
 
 screencast() { \
@@ -32,7 +32,7 @@ screencast() { \
 	-i "$DISPLAY" \
 	-r 24 \
 	-use_wallclock_as_timestamps 1 \
-	-f alsa -thread_queue_size 1024 -i default \
+	-f oss -thread_queue_size 1024 -i /dev/dsp \
  	-c:v h264 \
 	-crf 0 -preset ultrafast -c:a aac \
 	"$HOME/screencast-$(date '+%y%m%d-%H%M-%S').mp4" &
@@ -72,7 +72,7 @@ webcam() { ffmpeg \
 
 audio() { \
 	ffmpeg \
-	-f alsa -i default \
+	-f oss -i /dev/dsp \
 	-c:a flac \
 	"$HOME/audio-$(date '+%y%m%d-%H%M-%S').flac" &
 	echo $! > /tmp/recordingpid

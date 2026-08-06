@@ -2,32 +2,56 @@
 
 # Prints the current volume or  if muted.
 
+# Audio here is the base system's OSS, driven with mixer(8) - there is no
+# sound server in the way. pipewire is in the ports tree though, so if someone
+# has one running, defer to it rather than fighting it for the device.
+usewpctl() { command -v wpctl >/dev/null 2>&1 && wpctl status >/dev/null 2>&1 ;}
+
+togglemute() {
+	usewpctl && { wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle; return ;}
+	mixer vol.mute=^ >/dev/null 2>&1
+}
+
+changevol() { # $1 is + or -
+	usewpctl && { wpctl set-volume @DEFAULT_AUDIO_SINK@ "1%$1"; return ;}
+	mixer "vol=${1}1" >/dev/null 2>&1
+}
+
 case $BLOCK_BUTTON in
-	1) setsid -w -f "$TERMINAL" -e pulsemixer; pkill -RTMIN+10 "${STATUSBAR:-dwmblocks}" ;;
-	2) wpctl set-mute @DEFAULT_SINK@ toggle ;;
-	4) wpctl set-volume @DEFAULT_SINK@ 1%+ ;;
-	5) wpctl set-volume @DEFAULT_SINK@ 1%- ;;
+	1) "$TERMINAL" -e mixertui; pkill -75 "${STATUSBAR:-dwmblocks}" ;;
+	2) togglemute ;;
+	4) changevol + ;;
+	5) changevol - ;;
 	3) notify-send " Volume module" "\- Shows volume ,  if muted.
 - Middle click to mute.
 - Scroll to change." ;;
-	6) setsid -f "$TERMINAL" -e "$EDITOR" "$0" ;;
+	6) daemon -f "$TERMINAL" -e "$EDITOR" "$0" ;;
 esac
 
-vol="$(wpctl get-volume @DEFAULT_AUDIO_SINK@)"
+if usewpctl; then
+	vol="$(wpctl get-volume @DEFAULT_AUDIO_SINK@)"
+	[ "$vol" != "${vol%\[MUTED\]}" ] && muted=1
+	vol="${vol#Volume: }"
+	# For ommiting the . without calling and external program.
+	split() {
+		IFS=$2
+		set -- $1
+		printf '%s' "$@"
+	}
+	vol="$(printf "%.0f" "$(split "$vol" ".")")"
+else
+	# mixer -s prints script-friendly output: "vol 0.75:0.75" on the modern
+	# mixer(8) and "vol 75:75" on the older one, so scale whichever it gives.
+	case "$(mixer -s vol.mute 2>/dev/null)" in
+	*" 1") muted=1 ;;
+	esac
+	vol="$(mixer -s vol 2>/dev/null |
+		awk '{ split($2, v, ":"); n = v[1]; if (n <= 1) n *= 100; printf "%.0f", n }')"
+	[ -n "$vol" ] || exit 0
+fi
 
 # If muted, print  and exit.
-[ "$vol" != "${vol%\[MUTED\]}" ] && echo  && exit
-
-vol="${vol#Volume: }"
-
-split() {
-	# For ommiting the . without calling and external program.
-	IFS=$2
-	set -- $1
-	printf '%s' "$@"
-}
-
-vol="$(printf "%.0f" "$(split "$vol" ".")")"
+[ -n "$muted" ] && echo  && exit
 
 case 1 in
 	$((vol >= 70)) ) icon="" ;;

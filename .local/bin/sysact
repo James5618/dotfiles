@@ -2,34 +2,65 @@
 
 # A dmenu wrapper script for system functions.
 export WM="dwm"
-case "$(readlink -f /sbin/init)" in
-	*systemd*) ctl='systemctl' ;;
-	*) ctl='loginctl' ;;
-esac
 
-wmpid(){ # This function is needed if there are multiple instances of the window manager.
-	tree="$(pstree -ps $$)"
-	tree="${tree#*$WM(}"
-	echo "${tree%%)*}"
+# There is no systemd or elogind here: power actions go through the base
+# system's own tools, and all of them want root, so they are run with sudo -A
+# (the askpass helper the rice already sets in $SUDO_ASKPASS).
+poweroff_cmd="sudo -A shutdown -p now"
+reboot_cmd="sudo -A shutdown -r now"
+# acpiconf -s3 is suspend-to-RAM; -s4 is suspend-to-disk, which needs a
+# configured swap-backed hibernate and simply fails where there is none.
+suspend_cmd="sudo -A acpiconf -s3"
+hibernate_cmd="sudo -A acpiconf -s4"
+
+wmpid() { # This function is needed if there are multiple instances of the window manager.
+	# pstree(1) is a Linux tool. Walk the parent chain with ps(1) instead and
+	# stop at the first ancestor that is the window manager.
+	#
+	# Each column needs its own -o: in "-o ppid=,comm=" BSD ps reads
+	# everything after the = as the header text for ppid, so it prints one
+	# column headed ",comm=" and the walk gets a header where it wanted a pid.
+	pid=$$
+	while [ "$pid" -gt 1 ] 2>/dev/null; do
+		set -- $(ps -o ppid= -o comm= -p "$pid" 2>/dev/null)
+		[ -n "$1" ] || break
+		[ "$2" = "$WM" ] && { echo "$pid"; return 0 ;}
+		pid="$1"
+	done
+	# If the walk cannot find it, the newest one will do: leaving the window
+	# manager is worse than useless if the option silently does nothing.
+	pgrep -xn "$WM"
 }
 
 lock(){
-	was_muted="$(wpctl get-volume @DEFAULT_AUDIO_SINK@ | grep -o 'MUTED' && echo 1 || echo 0)"
+	# Mute over the lock screen, then put the mute back only if it was not
+	# already set. OSS is the usual case; wpctl is only here for a machine
+	# that someone has put pipewire on.
+	if command -v wpctl >/dev/null 2>&1 && wpctl status >/dev/null 2>&1; then
+		wpctl get-volume @DEFAULT_AUDIO_SINK@ | grep -q MUTED || was_muted=0
+		wpctl set-mute @DEFAULT_AUDIO_SINK@ 1 &
+		unmute="wpctl set-mute @DEFAULT_AUDIO_SINK@ 0"
+	else
+		case "$(mixer -s vol.mute 2>/dev/null)" in
+		*" 0") was_muted=0 ;;
+		esac
+		mixer vol.mute=1 >/dev/null 2>&1
+		unmute="mixer vol.mute=0"
+	fi
 	mpc pause & pauseallmpv &
-	wpctl set-mute @DEFAULT_AUDIO_SINK@ 1 &
 	slock
-	[ "$was_muted" -eq 0 ] && wpctl set-mute @DEFAULT_AUDIO_SINK@ 0
-	pkill -RTMIN+10 "${STATUSBAR:-dwmblocks}"
+	[ "$was_muted" = 0 ] && $unmute >/dev/null 2>&1
+	pkill -75 "${STATUSBAR:-dwmblocks}"
 }
 
 case "$(printf " lock\n leave $WM\n renew $WM\n hibernate\n reboot\n shutdown\n sleep\n display off" | dmenu -i -p 'Action: ')" in
 	' lock') lock ;;
 	" leave $WM") kill -TERM "$(wmpid)" ;;
 	" renew $WM") kill -HUP "$(wmpid)" ;;
-	' hibernate') slock $ctl hibernate -i ;;
-	' sleep') slock $ctl suspend -i ;;
-	' reboot') $ctl reboot -i ;;
-	' shutdown') $ctl poweroff -i ;;
+	' hibernate') slock $hibernate_cmd ;;
+	' sleep') slock $suspend_cmd ;;
+	' reboot') $reboot_cmd ;;
+	' shutdown') $poweroff_cmd ;;
 	' display off') xset dpms force off ;;
 	*) exit 1 ;;
 esac

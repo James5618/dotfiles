@@ -4,12 +4,16 @@
 
 notify-send "📦 Repository Sync" "Checking for package updates..."
 
-sudo pacman -Syyuw --noconfirm || notify-send "Error downloading updates.
+# -F fetches the packages without installing them, which is the pkg(8)
+# equivalent of pacman -Syyuw: the upgrade itself stays a deliberate act.
+sudo pkg update -f >/dev/null 2>&1 && sudo pkg upgrade -Fy >/dev/null 2>&1 ||
+	notify-send "Error downloading updates.
 
-Check your internet connection, if pacman is already running, or run update manually to see errors."
-pkill -RTMIN+8 "${STATUSBAR:-dwmblocks}"
+Check your internet connection, whether another pkg process holds the lock, or
+run the update by hand to see the errors."
+pkill -73 "${STATUSBAR:-dwmblocks}"
 
-if pacman -Qu | grep -v "\[ignored\]"
+if pkg version -vRL= 2>/dev/null | grep -q .
 then
 	notify-send "🎁 Repository Sync" "Updates available. Click statusbar icon (📦) for update."
 else

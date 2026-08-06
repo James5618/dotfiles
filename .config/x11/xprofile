@@ -8,17 +8,54 @@ xsetroot -cursor_name left_ptr	# Root cursor; without this the pointer is invisi
 setbg &			# set the background with the `setbg` script
 xrdb ${XDG_CONFIG_HOME:-$HOME/.config}/x11/xresources & xrdbpid=$!	# Load Xresources colors/settings on startup
 
-autostart="mpd dunst unclutter pipewire remapd"
+# vmware-user-suid-wrapper is only present on a VMware guest, where it is
+# what shares the clipboard and resizes the display with the window. It is
+# simply absent elsewhere, and the loop below ignores what it cannot run.
+autostart="mpd dunst unclutter remapd vmware-user-suid-wrapper"
 
+# pgrep, not pidof: pidof(1) is Linux's psmisc and is not in the base system.
 for program in $autostart; do
-	pidof -sx "$program" || "$program" &
+	pgrep -x "$program" || "$program" &
 done >/dev/null 2>&1
 
-# picom is started separately so it can fall back: the glx backend rounds
-# corners far more cleanly, but it needs working OpenGL and exits immediately
-# where there is none, which would leave windows square and unfaded.
-pidof -sx picom >/dev/null 2>&1 ||
-	{ picom || picom --backend xrender ;} >/dev/null 2>&1 &
+# picom draws the rounded corners, so the backend has to be one that paints
+# reliably. Under a hypervisor that rules glx out. It starts, composites one
+# correct frame and then never repaints: without a DRM device there is no
+# DRI3, so GLX_EXT_texture_from_pixmap binds each window's pixmap once and
+# never re-syncs. Nothing in the exit status says so, which is why this is a
+# choice rather than a fallback - a broken glx cannot be fallen back from.
+# egl aborts outright on the same missing device.
+#
+# xrender is the slow one that is also the correct one. It rounds corners, it
+# just cannot antialias them, so they come out stepped next to what glx draws
+# on real hardware. That is the cost of the missing DRM device, and there is
+# no configuration that buys it back.
+#
+# Blanking goes off there as well: a virtual screen has no power to save, and
+# waking one used to cost picom its GL context.
+#
+# --no-vsync because llvmpipe exposes no GLX_*_swap_control and a virtual
+# display has no refresh cycle to synchronise to; picom.conf keeps
+# vsync = true, which is what a real GPU wants.
+#
+# kern.vm_guest is the FreeBSD equivalent of systemd-detect-virt: it reads
+# "none" on real hardware and names the hypervisor (bhyve, kvm, vmware, xen,
+# hv) otherwise.
+#
+# Keep the log: a compositor that dies silently is what made this so hard to
+# place in the first instance.
+if ! pgrep -x picom >/dev/null 2>&1; then
+	case "$(sysctl -n kern.vm_guest 2>/dev/null)" in
+	"" | none)
+		{ picom --backend glx || picom --backend xrender ;} \
+			>/tmp/picom.log 2>&1 &
+		;;
+	*)
+		xset s off -dpms
+		picom --backend xrender --no-vsync >/tmp/picom.log 2>&1 &
+		;;
+	esac
+fi
 
 # Ensure that xrdb has finished running before moving on to start the WM/DE.
 [ -n "$xrdbpid" ] && wait "$xrdbpid"

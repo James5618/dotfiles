@@ -28,11 +28,11 @@ chartfile="$dir/$target-$denom-chart"
 [ -d "$dir" ] || mkdir -p "$dir"
 
 checkprice() {
-	[ "$(stat -c %y "$pricefile" 2>/dev/null |
+	[ "$(stat -f '%Sm' -t '%Y-%m-%d' "$pricefile" 2>/dev/null |
 		cut -d' ' -f1)" = "$(date '+%Y-%m-%d')" ]
 }
 
-updateprice() { { grep -q -m1 '^up$' /sys/class/net/w*/operstate || grep -q -m1 '^up$' /sys/class/net/e*/operstate; } &&
+updateprice() { route -n get -inet default >/dev/null 2>&1 &&
 	curl -sf \
 		--fail-early "${denom}.${url}/1${target}" "${denom}.${url}/${target}${interval}" \
 		--output "$pricefile" --output "$chartfile" &&
@@ -42,16 +42,16 @@ updateprice() { { grep -q -m1 '^up$' /sys/class/net/w*/operstate || grep -q -m1 
 checkprice || updateme="1"
 
 case $BLOCK_BUTTON in
-	1) setsid "$TERMINAL" -e less -Srf "$chartfile" ;;
+	1) "$TERMINAL" -e less -Srf "$chartfile" ;;
 	2) notify-send -u low "$icon Updating..." "Updating $name price..." ; updateme="1" ; showupdate="1" ;;
-	3) uptime="$(date -d "$(stat -c %x "$pricefile" 2>/dev/null)" '+%D at %T' | sed "s|$(date '+%D')|Today|")"
+	3) uptime="$(stat -f '%Sa' -t '%D at %T' "$pricefile" 2>/dev/null | sed "s|$(date '+%D')|Today|")"
 		notify-send "$icon $name module" "\- <b>Exact price: \$$(cat "$pricefile")</b>
 - Left click for chart of changes.
 - Middle click to update.
 - Shows 🔃 if updating prices.
 - <b>Last updated:
 	$uptime</b>" ;;
-	6) setsid -f "$TERMINAL" -e "$EDITOR" "$0" ;;
+	6) daemon -f "$TERMINAL" -e "$EDITOR" "$0" ;;
 esac
 
 [ -n "$updateme" ] &&
@@ -59,17 +59,25 @@ esac
 		updateprice && notify-send "$icon Update complete." "$name price is now \$$(cat "$pricefile")"
 	else
 		# shellcheck disable=SC2015
-		[ -n "$4" ] &&
-			( flock -n 9 &&
+		[ -n "$4" ] && {
+		# flock(1) is util-linux, and lockf(1) - the base system's
+		# equivalent - cannot hold a lock around a shell function, so take
+		# the lock with a directory: mkdir is atomic, and the background job
+		# drops it on the way out. XDG_RUNTIME_DIR is only set for login
+		# sessions here (pam_xdg), so it needs a fallback or the lock lands
+		# on / and fails.
+		lockdir="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/sb-price.lock"
+		mkdir "$lockdir" 2>/dev/null &&
+				( trap 'rmdir "$lockdir" 2>/dev/null' EXIT
 				( tries=0; while [ $tries -ne 100 ]; do
 					updateprice && break ||
 						{ tries=$((tries+1)); sleep .1; }
 				done
 				! checkprice &&
 					until updateprice; do sleep 60; done
-				pkill -RTMIN+"$4" "${STATUSBAR:-dwmblocks}"
+				pkill -"$((65 + $4))" "${STATUSBAR:-dwmblocks}"
 				) &
-			echo; exit ) 9>"${XDG_RUNTIME_DIR}/sb-price.lock" ||
+				) & } ||
 				updateprice
 	fi
 

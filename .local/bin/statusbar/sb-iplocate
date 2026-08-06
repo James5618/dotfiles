@@ -8,22 +8,31 @@
 ifinstalled "geoip" || exit 1
 
 getip() {
-	{ grep -q -m1 '^up$' /sys/class/net/w*/operstate || grep -q -m1 '^up$' /sys/class/net/e*/operstate; } &&
+	route -n get -inet default >/dev/null 2>&1 &&
 		curl -sf api.ipify.org --output "$ipfile"
 }
 
-ipfile="$XDG_RUNTIME_DIR/iplocate"
+ipfile="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/iplocate"
 addr=$(cat "$ipfile" 2>/dev/null) && addr=$(geoiplookup "$addr" 2>/dev/null) && rm "$ipfile" ||
-	( flock -n 9 &&
+	{
+	# flock(1) is util-linux, and lockf(1) - the base system's equivalent -
+	# cannot hold a lock around a shell function, so take the lock with a
+	# directory instead: mkdir is atomic, and the background job drops it on
+	# the way out. XDG_RUNTIME_DIR is only set for login sessions here (by
+	# pam_xdg), so it needs a fallback or the lock lands on / and fails.
+	lockdir="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/sb-iplocate.lock"
+	mkdir "$lockdir" 2>/dev/null &&
+		( trap 'rmdir "$lockdir" 2>/dev/null' EXIT
 		( tries=0; while [ $tries -ne 100 ]; do
 			getip && break ||
 				{ tries=$((tries+1)); sleep .1; }
 		done
 		! [ -f "$ipfile" ] &&
 			until getip; do sleep 60; done &&
-		pkill -RTMIN+"${1:-27}" "${STATUSBAR:-dwmblocks}"
+		pkill -"$((65 + ${1:-27}))" "${STATUSBAR:-dwmblocks}"
 		) &
-	echo; exit ) 9>"${XDG_RUNTIME_DIR}/sb-iplocate.lock"
+		) &
+}
 name="${addr##*, }"
 flag="$(grep "flag: $name" "${XDG_DATA_HOME:-$HOME/.local/share}/rice/emoji")"
 flag="${flag%% *}"

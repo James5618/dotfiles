@@ -1,13 +1,9 @@
 #!/bin/sh
 
-# current brightness
-curr_brightness=$(cat /sys/class/backlight/*/brightness)
-
-# max_brightness
-max_brightness=$(cat /sys/class/backlight/*/max_brightness)
-
-# brightness percentage
-brightness_per=$((100 * curr_brightness / max_brightness))
+# FreeBSD exposes the panel backlight through backlight(8) rather than
+# /sys/class/backlight; it already reports a percentage.
+brightness_per="$(backlight 2>/dev/null | sed -n 's/^brightness: *//p')"
+[ -n "$brightness_per" ] || exit 0
 
 case $BLOCK_BUTTON in
     1) 
@@ -16,7 +12,7 @@ case $BLOCK_BUTTON in
         notify-send "💡 Brightness module" "\- Shows current brightness level ☀️." 
         ;;
     6) 
-        setsid -f "$TERMINAL" -e "$EDITOR" "$0"
+        daemon -f "$TERMINAL" -e "$EDITOR" "$0"
         ;;
 esac
 

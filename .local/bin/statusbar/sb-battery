@@ -10,28 +10,42 @@ case $BLOCK_BUTTON in
 : charging
 : charged
 : battery very low!
-- Scroll to change adjust xbacklight." ;;
-	4) xbacklight -inc 10 ;;
-	5) xbacklight -dec 10 ;;
-	6) setsid -f "$TERMINAL" -e "$EDITOR" "$0" ;;
+- Scroll to change the backlight." ;;
+	4) backlight incr 10 ;;
+	5) backlight decr 10 ;;
+	6) daemon -f "$TERMINAL" -e "$EDITOR" "$0" ;;
 esac
 
-# Loop through all attached batteries and format the info
-for battery in /sys/class/power_supply/BAT?*; do
-	# If non-first battery, print a space separator.
-	[ -n "${capacity+x}" ] && printf " "
-	# Sets up the status and capacity
-	case "$(cat "$battery/status" 2>&1)" in
-		"Full") status="" ;;
-		"Discharging") status="" ;;
-		"Charging") status="" ;;
-		"Not charging") status="" ;;
-		"Unknown") status="" ;;
-		*) exit 1 ;;
-	esac
-	capacity="$(cat "$battery/capacity" 2>&1)"
-	# Will make a warn variable if discharging and low
-	[ "$status" = "" ] && [ "$capacity" -le 25 ] && warn=""
-	# Prints the info
-	printf "%s%s %d%%" "$status" "$warn" "$capacity"; unset warn
-done && printf "\\n"
+# FreeBSD has no /sys: ACPI reports the battery through sysctls, and the
+# figures are already summed over every battery in the machine. Per-battery
+# detail would need acpiconf(8), which only root may run.
+capacity="$(sysctl -n hw.acpi.battery.life 2>/dev/null)"
+
+# No ACPI battery (a desktop, or a virtual machine): print nothing at all.
+case "$capacity" in
+	"" | *[!0-9]*) exit 0 ;;
+esac
+
+# hw.acpi.battery.state is a bitfield: 1 discharging, 2 charging, 4 critical.
+state="$(sysctl -n hw.acpi.battery.state 2>/dev/null)"
+case "$state" in
+	"" | *[!0-9]*) state=0 ;;
+esac
+
+if [ "$((state & 2))" -ne 0 ]; then
+	status=""
+elif [ "$((state & 1))" -ne 0 ]; then
+	status=""
+elif [ "$capacity" -ge 99 ]; then
+	status=""
+elif [ "$(sysctl -n hw.acpi.acline 2>/dev/null)" = "1" ]; then
+	# On the mains, but the battery is taking no charge.
+	status=""
+else
+	status=""
+fi
+
+# Will make a warn variable if discharging and low
+[ "$status" = "" ] && [ "$capacity" -le 25 ] && warn=""
+
+printf "%s%s %d%%\n" "$status" "$warn" "$capacity"

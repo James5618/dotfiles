@@ -1,8 +1,26 @@
-#!/bin/bash
+#!/bin/sh
 
 # Rerun the remaps script whenever a new input device is added.
+#
+# The Linux version watches udevadm; there is no udev here. devd(8) publishes
+# every device attach and detach on a socket, and a new keyboard or mouse
+# arrives as a line naming it - ukbd, atkbd, ums, psm or a generic uhid.
+
+remaps
+
+pipe="/var/run/devd.pipe"
+
+# No devd (it is enabled by the bootstrap, but a machine may have it off):
+# the remap above still applied, so there is nothing useful left to do.
+{ [ -S "$pipe" ] && command -v nc >/dev/null 2>&1 ;} || exit 0
 
 while :; do
-	remaps
-	grep -qP -m1 '[^un]bind.+\/[^:]+\(usb\)' <(udevadm monitor -u -t seat -s input -s usb)
+	nc -U "$pipe" 2>/dev/null | while read -r line; do
+		case "$line" in
+		+ukbd* | +atkbd* | +ums* | +psm* | +uhid* | +kbdmux*) remaps ;;
+		esac
+	done
+	# devd was restarted, or the socket went away with it: wait for it to
+	# come back rather than spinning on a dead read.
+	sleep 5
 done

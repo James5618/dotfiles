@@ -1,13 +1,21 @@
 #!/bin/sh
 
 # Unmount USB drives or Android phones. Replaces the older `dmenuumount`. Fewer
-# prompt and also de-decrypts LUKS drives that are unmounted.
+# prompts, and also detaches geli devices that are unmounted.
+#
+# mount -p prints the fstab-style table this needs; there is no /etc/mtab and
+# no lsblk here.
 
 set -e
 
-mounteddroids="$(grep simple-mtpfs /etc/mtab | awk '{print "📱" $2}')"
-lsblkoutput="$(lsblk -nrpo "name,type,size,mountpoint")"
-mounteddrives="$(echo "$lsblkoutput" | awk '($2=="part"||$2="crypt")&&$4!~/\/boot|\/home$|SWAP/&&length($4)>1{printf "💾%s (%s)\n",$4,$3}')"
+mountlist="$(mount -p)"
+
+mounteddroids="$(echo "$mountlist" | awk '$1 ~ /simple-mtpfs/ {print "📱" $2}')"
+
+# Anything mounted from a real device outside the system's own filesystems.
+mounteddrives="$(echo "$mountlist" | awk '$1 ~ /^\/dev\// &&
+	$2 != "/" && $2 != "/boot" && $2 != "/home" && $2 != "/usr" && $2 != "/var" &&
+	$2 != "/tmp" && $3 != "swap" {printf "💾%s (%s)\n", $2, $1}')"
 
 allunmountable="$(echo "$mounteddroids
 $mounteddrives" | sed "/^$/d;s/ *$//")"
@@ -17,12 +25,16 @@ chosen="$(echo "$allunmountable" | dmenu -i -p "Unmount which drive?")"
 chosen="${chosen%% *}"
 test -n "$chosen"
 
-sudo -A umount -l "/${chosen#*/}"
+mountpoint="/${chosen#*/}"
+device="$(echo "$mountlist" | awk -v mp="$mountpoint" '$2 == mp {print $1; exit}')"
+
+sudo -A umount "$mountpoint"
 notify-send "Device unmounted." "$chosen has been unmounted."
 
-# Close the chosen drive if decrypted.
-cryptid="$(echo "$lsblkoutput" | grep "/${chosen#*/}$")"
-cryptid="${cryptid%% *}"
-test -b /dev/mapper/"${cryptid##*/}"
-sudo -A cryptsetup close "$cryptid"
-notify-send "🔒Device dencryption closed." "Drive is now securely locked again."
+# Close the chosen drive if it was a geli provider.
+case "$device" in
+*.eli)
+	sudo -A geli detach "${device%.eli}"
+	notify-send "🔒Device dencryption closed." "Drive is now securely locked again."
+	;;
+esac

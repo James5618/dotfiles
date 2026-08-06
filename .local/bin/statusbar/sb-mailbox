@@ -4,17 +4,19 @@
 # When clicked, brings up `neomutt`.
 
 case $BLOCK_BUTTON in
-	1) setsid -w -f "$TERMINAL" -e neomutt; pkill -RTMIN+12 "${STATUSBAR:-dwmblocks}" ;;
-	2) setsid -f mw -Y >/dev/null ;;
+	1) "$TERMINAL" -e neomutt; pkill -77 "${STATUSBAR:-dwmblocks}" ;;
+	2) daemon -f mw -Y >/dev/null ;;
 	3) notify-send " Mail module" "\- Shows unread mail
 - Shows  if syncing mail
 - Left click opens neomutt
 - Middle click syncs mail" ;;
-	6) setsid -f "$TERMINAL" -e "$EDITOR" "$0" ;;
+	6) daemon -f "$TERMINAL" -e "$EDITOR" "$0" ;;
 esac
 
-unread="$(find "${XDG_DATA_HOME:-$HOME/.local/share}"/mail/*/[Ii][Nn][Bb][Oo][Xx]/new/* -type f | wc -l 2>/dev/null)"
+# No mail set up yet means the glob matches nothing, and find says so on
+# stderr every three minutes; the count is what matters here.
+unread="$(find "${XDG_DATA_HOME:-$HOME/.local/share}"/mail/*/[Ii][Nn][Bb][Oo][Xx]/new/* -type f 2>/dev/null | wc -l)"
 
-pidof mbsync >/dev/null 2>&1 && icon=""
+pgrep -x mbsync >/dev/null 2>&1 && icon=""
 
 [ "$unread" = "0" ] && [ "$icon" = "" ] || echo " $unread$icon"

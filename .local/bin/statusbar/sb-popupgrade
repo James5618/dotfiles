@@ -2,8 +2,8 @@
 
 printf "Beginning upgrade.\\n"
 
-yay -Syu
-pkill -RTMIN+8 "${STATUSBAR:-dwmblocks}"
+sudo -A pkg update && sudo -A pkg upgrade
+pkill -73 "${STATUSBAR:-dwmblocks}"
 
 printf "\\nUpgrade complete.\\nPress <Enter> to exit window.\\n\\n"
 read -r _

@@ -4,6 +4,11 @@
 !! Set a default font and font size as below:
 *.font: monospace:size=10
 
+!! st's own default is 2px, which puts the first cell of every line inside
+!! picom's 10px corner curve. Match the radius so no glyph is ever clipped.
+!! Read at startup only, so existing terminals keep their old padding.
+st.borderpx: 10
+
 /* name		dark	light */
 /* black	0	8 */
 /* red		1	9 */

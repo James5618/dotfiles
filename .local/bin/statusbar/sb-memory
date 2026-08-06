@@ -1,12 +1,22 @@
 #!/bin/sh
 
 case $BLOCK_BUTTON in
-	1) notify-send "🧠 Memory hogs" "$(ps axch -o cmd,%mem | awk '{cmd[$1]+=$2} END {for (i in cmd) print i, cmd[i]}' | sort -nrk2 | head)" ;;
-	2) setsid -f "$TERMINAL" -e htop ;;
+	1) notify-send "🧠 Memory hogs" "$(ps -axo comm= -o pmem= | awk '{cmd[$1]+=$2} END {for (i in cmd) print i, cmd[i]}' | sort -nrk2 | head)" ;;
+	2) daemon -f "$TERMINAL" -e htop ;;
 	3) notify-send "🧠 Memory module" "\- Shows Memory Used/Total.
 - Click to show memory hogs.
 - Middle click to open htop." ;;
-	6) setsid -f "$TERMINAL" -e "$EDITOR" "$0" ;;
+	6) daemon -f "$TERMINAL" -e "$EDITOR" "$0" ;;
 esac
 
-free --mebi | sed -n '2{p;q}' | awk '{printf ("🧠%2.2fGiB/%2.2fGiB\n", ( $3 / 1024), ($2 / 1024))}'
+# There is no free(1) here. vm.stats reports pages, so scale by the page size;
+# "used" is total minus the free, inactive and cached (i.e. reclaimable) pages,
+# which is the closest analogue to what free(1) calls used.
+sysctl -n hw.pagesize vm.stats.vm.v_page_count vm.stats.vm.v_free_count \
+	vm.stats.vm.v_inactive_count vm.stats.vm.v_cache_count 2>/dev/null |
+	awk 'NR == 1 { ps = $1 } NR == 2 { total = $1 } NR > 2 { avail += $1 }
+	END {
+		if (!total) exit 1
+		printf "🧠%2.2fGiB/%2.2fGiB\n", (total - avail) * ps / 1073741824,
+			total * ps / 1073741824
+	}'

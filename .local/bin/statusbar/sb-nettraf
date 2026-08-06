@@ -5,25 +5,39 @@
 # second, gives network traffic per second.
 
 case $BLOCK_BUTTON in
-	1) setsid -f "$TERMINAL" -e bmon ;;
+	1) daemon -f "$TERMINAL" -e bmon ;;
 	3) notify-send " Network traffic module" ": Traffic received
 : Traffic transmitted" ;;
-	6) setsid -f "$TERMINAL" -e "$EDITOR" "$0" ;;
+	6) daemon -f "$TERMINAL" -e "$EDITOR" "$0" ;;
 esac
 
+# There is no /sys here, so the byte counters come from netstat(1). Index the
+# columns from the end: an interface with no link address prints one field
+# fewer, which would shift a fixed column number.
 update() {
-    sum=0
-    for arg; do
-        read -r i < "$arg"
-        sum=$(( sum + i ))
-    done
-    cache=/tmp/${1##*/}
-    [ -f "$cache" ] && read -r old < "$cache" || old=0
-    printf %d\\n "$sum" > "$cache"
-    printf %d\\n $(( sum - old ))
+	sum="$(netstat -ibnW -f link | awk -v col="$1" '
+		NR > 1 && $1 !~ /^lo/ && seen[$1]++ == 0 {
+			sum += (col == "rx" ? $(NF - 4) : $(NF - 1))
+		}
+		END { printf "%d", sum + 0 }')"
+	cache="/tmp/sb-nettraf-$1"
+	[ -f "$cache" ] && read -r old < "$cache" || old=0
+	printf "%d\n" "$sum" > "$cache"
+	printf "%d\n" "$((sum - old))"
 }
 
-rx=$(update /sys/class/net/[ew]*/statistics/rx_bytes)
-tx=$(update /sys/class/net/[ew]*/statistics/tx_bytes)
+# numfmt(1) is GNU coreutils and is not in the FreeBSD base system.
+iec() {
+	awk -v n="$1" 'BEGIN {
+		split("K M G T P", u, " ")
+		if (n < 1024) { printf "%d", n; exit }
+		i = 0
+		while (n >= 1024 && i < 5) { n /= 1024; i++ }
+		if (n < 10) printf "%.1f%s", n, u[i]; else printf "%.0f%s", n, u[i]
+	}'
+}
 
-printf " %4sB  %4sB\\n" $(numfmt --to=iec $rx $tx)
+rx="$(update rx)"
+tx="$(update tx)"
+
+printf " %4sB  %4sB\\n" "$(iec "$rx")" "$(iec "$tx")"

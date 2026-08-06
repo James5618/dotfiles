@@ -5,16 +5,23 @@
 moonfile="${XDG_DATA_HOME:-$HOME/.local/share}/moonphase"
 
 checkmoon() {
-	[ "$(stat -c %y "$moonfile" 2>/dev/null |
+	[ "$(stat -f '%Sm' -t '%Y-%m-%d' "$moonfile" 2>/dev/null |
 		cut -d' ' -f1)" = "$(date '+%Y-%m-%d')" ]
 }
 
-getmoon() { { grep -q -m1 '^up$' /sys/class/net/w*/operstate || grep -q -m1 '^up$' /sys/class/net/e*/operstate; } &&
+getmoon() { route -n get -inet default >/dev/null 2>&1 &&
 	curl -sf "wttr.in/?format=%m" --output "$moonfile" && touch "$moonfile"
 }
 
-checkmoon ||
-	( flock -n 9 &&
+checkmoon || {
+	# flock(1) is util-linux, and lockf(1) - the base system's equivalent -
+	# cannot hold a lock around a shell function, so take the lock with a
+	# directory instead: mkdir is atomic, and the background job drops it on
+	# the way out. XDG_RUNTIME_DIR is only set for login sessions here (by
+	# pam_xdg), so it needs a fallback or the lock lands on / and fails.
+	lockdir="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/sb-moonphase.lock"
+	mkdir "$lockdir" 2>/dev/null &&
+		( trap 'rmdir "$lockdir" 2>/dev/null' EXIT
 		( tries=0; while [ $tries -ne 100 ]; do
 			# shellcheck disable=SC2015
 			getmoon && break ||
@@ -22,9 +29,10 @@ checkmoon ||
 		done
 		! checkmoon &&
 			until getmoon; do sleep 60; done
-		pkill -RTMIN+"${1:-17}" "${STATUSBAR:-dwmblocks}"
+		pkill -"$((65 + ${1:-17}))" "${STATUSBAR:-dwmblocks}"
 		) &
-	echo; exit ) 9>"${XDG_RUNTIME_DIR}/sb-moonphase.lock"
+		) &
+}
 
 icon="$(cat "$moonfile")"
 
@@ -52,5 +60,5 @@ case $BLOCK_BUTTON in
 - 🌖: Waning Gibbous
 - 🌗: Last Quarter
 - 🌘: Waning Crescent" ;;
-	6) setsid -f "$TERMINAL" -e "$EDITOR" "$0" ;;
+	6) daemon -f "$TERMINAL" -e "$EDITOR" "$0" ;;
 esac

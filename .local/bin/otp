@@ -19,7 +19,7 @@ case $choice in
 	🆕add )
 		ifinstalled maim zbar xclip || exit 1
 
-		temp=$(mktemp -p "$XDG_RUNTIME_DIR" --suffix=.png)
+		temp="$(mktemp "${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/otp.XXXXXX").png"
 		otp="otp-test-script"
 		trap 'shred -fu $temp; pass rm -f $otp' HUP INT QUIT TERM PWR EXIT
 

@@ -6,7 +6,12 @@ base="$(basename "$1")"
 notify-send "⏳ Queuing $base..."
 cmd="$2"
 [ -z "$cmd" ] && cmd="yt-dlp --embed-metadata -ic"
-idnum="$(tsp $cmd "$1")"
+# By path: the base system's own ts(1) is a timestamp filter and comes first
+# in PATH, so a bare `ts` would not be the task spooler.
+tsp="/usr/local/bin/ts"
+[ -x "$tsp" ] || tsp="$(command -v tsp)" ||
+	{ notify-send "📦 ts" "the task spooler must be installed to queue downloads."; exit 1 ;}
+idnum="$("$tsp" $cmd "$1")"
 realname="$(echo "$base" | sed "s/?\(source\|dest\).*//;s/%20/ /g")"
-tsp -D "$idnum" mv "$base" "$realname"
-tsp -D "$idnum" notify-send "👍 $realname done."
+"$tsp" -D "$idnum" mv "$base" "$realname"
+"$tsp" -D "$idnum" notify-send "👍 $realname done."
