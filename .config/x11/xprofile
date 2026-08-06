@@ -14,11 +14,19 @@ for program in $autostart; do
 	pidof -sx "$program" || "$program" &
 done >/dev/null 2>&1
 
-# picom is started separately so it can fall back: the glx backend rounds
-# corners far more cleanly, but it needs working OpenGL and exits immediately
-# where there is none, which would leave windows square and unfaded.
-pidof -sx picom >/dev/null 2>&1 ||
-	{ picom || picom --backend xrender ;} >/dev/null 2>&1 &
+# picom is started separately because the backend has to suit the hardware.
+# glx rounds corners far more cleanly, but under a hypervisor OpenGL is
+# software-rendered: it survives startup (so waiting for picom to exit is not
+# enough) and then loses its context when the screen wakes from DPMS, after
+# which picom never paints again and the desktop looks frozen even though X
+# and dwm are still running. Use xrender there, and stop blanking altogether
+# since a virtual screen has no power to save.
+if ! pidof -sx picom >/dev/null 2>&1; then
+	case "$(systemd-detect-virt 2>/dev/null || grep -io hypervisor /proc/cpuinfo | head -1)" in
+	"" | none) { picom || picom --backend xrender ;} >/dev/null 2>&1 & ;;
+	*) xset s off -dpms; picom --backend xrender >/dev/null 2>&1 & ;;
+	esac
+fi
 
 # Ensure that xrdb has finished running before moving on to start the WM/DE.
 [ -n "$xrdbpid" ] && wait "$xrdbpid"
